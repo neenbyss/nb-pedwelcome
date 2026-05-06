@@ -14,13 +14,16 @@ local function nbGaragesAvailable()
         and GetResourceState('nb-garages') == 'started'
 end
 
-local function nbGaragesPersistentSpawnAvailable()
-    if not nbGaragesAvailable() then return false end
-    if not Config.NbGarages.UseSpawnExport then return false end
-    -- The export is only registered when nb-garages has Config.PersistentVehicles = true
-    -- so a pcall'd call returning a usable result means it's available.
-    local exp = exports['nb-garages']
-    return exp and exp.SpawnPersistentVehicle ~= nil
+-- Cached after the first failed attempt so we don't keep retrying / log-spamming
+-- when nb-garages is started but Config.PersistentVehicles = false (export
+-- registration is gated behind that flag, so just touching the proxy field
+-- raises "No such export" — the call itself must be pcall'd).
+local _nbGaragesSpawnExportMissing = false
+
+local function nbGaragesSpawnConfigured()
+    return nbGaragesAvailable()
+        and Config.NbGarages.UseSpawnExport
+        and not _nbGaragesSpawnExportMissing
 end
 
 ---Detect which vehicle-keys resource is running.
@@ -86,6 +89,9 @@ local function giveVehicleKeys(src, plate)
 end
 
 ---Spawn a vehicle via nb-garages persistent system. Returns true on success.
+---On the first "No such export" error we mark the export as missing so we
+---stop retrying — the player's vehicle still went into the garage and the
+---client-spawn fallback will handle the physical spawn.
 ---@param plate string
 ---@param spawn vector4
 ---@return boolean
@@ -94,8 +100,19 @@ local function nbGaragesSpawn(plate, spawn)
     local ok, netIdOrErr = pcall(function()
         return exports['nb-garages']:SpawnPersistentVehicle(plate, pos)
     end)
-    if not ok or not netIdOrErr or netIdOrErr == false then
-        Debugger('NbGarages', 'SpawnPersistentVehicle failed for plate', plate, '->', tostring(netIdOrErr))
+    if not ok then
+        local err = tostring(netIdOrErr)
+        if err:find('No such export') then
+            _nbGaragesSpawnExportMissing = true
+            print(('[%s] nb-garages SpawnPersistentVehicle export not registered '):format(RESOURCE_NAME)
+                .. '(Config.PersistentVehicles is likely false). Falling back to client-side spawn.')
+        else
+            Debugger('NbGarages', 'SpawnPersistentVehicle error:', err)
+        end
+        return false
+    end
+    if not netIdOrErr or netIdOrErr == false then
+        Debugger('NbGarages', 'SpawnPersistentVehicle returned no netId for plate', plate)
         return false
     end
     return true
@@ -112,7 +129,6 @@ local function grantVehicles(src)
     local toSpawnClient = {}
     local vehicles = (Config.Rewards and Config.Rewards.Vehicles) or {}
     local hasNbGarages = nbGaragesAvailable()
-    local canPersistSpawn = nbGaragesPersistentSpawnAvailable()
     local defaultGarage = (Config.NbGarages and Config.NbGarages.AssignGarage) or 'PillboxGarage'
 
     for _, v in ipairs(vehicles) do
@@ -144,7 +160,9 @@ local function grantVehicles(src)
             -- 4) Physical spawn for Mode = 'spawn'.
             if v.Mode == 'spawn' and v.Spawn then
                 local spawnedByGarages = false
-                if canPersistSpawn then
+                -- Re-check inside the loop so the missing-export flag (set
+                -- after a failed first attempt) shortcircuits the rest.
+                if nbGaragesSpawnConfigured() then
                     spawnedByGarages = nbGaragesSpawn(plate, v.Spawn)
                 end
                 if not spawnedByGarages then
