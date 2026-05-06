@@ -74,6 +74,35 @@ Config.Interaction = {
 }
 
 -- ================================================
+-- INDICATORS
+-- Always-on visual cues so players know the NPC is interactive.
+-- Active in every interaction mode (target + distance).
+-- ================================================
+Config.Indicators = {
+    -- Floating chevron above the NPC's head (visible from far away)
+    Chevron = {
+        Enabled      = true,
+        Type         = 25, -- chevron arrow pointing down
+        Size         = vector3(0.5, 0.5, 0.4),
+        Color        = { r = 41, g = 121, b = 255, a = 200 },
+        HeightOffset = 1.2,
+        Distance     = 30.0,
+        BobUpAndDown = true,
+        Rotate       = true,
+    },
+
+    -- Floating 3D label above the NPC when the player gets close
+    Label = {
+        Enabled      = true,
+        Text         = nil,   -- nil = use Locale('floating_label')
+        Distance     = 12.0,
+        HeightOffset = 1.05,
+        Scale        = 0.4,
+        Color        = { r = 255, g = 255, b = 255, a = 215 },
+    },
+}
+
+-- ================================================
 -- WELCOME (visual feedback)
 -- ================================================
 Config.Welcome = {

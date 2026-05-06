@@ -4,7 +4,7 @@ lua54 'yes'
 
 author 'Neenbyss Studios'
 description 'NB Ped Welcome - Welcome NPC that grants money, items and vehicles to new players'
-version '1.0.1'
+version '1.0.2'
 
 dependencies {
     'oxmysql',

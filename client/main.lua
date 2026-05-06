@@ -10,7 +10,8 @@ local pedHandle = nil
 local blipHandle = nil
 local targetRegistered = false
 local distanceThreadActive = false
-local interactionEnabled = true   -- becomes false after claim if HideAfterClaim
+local indicatorThreadActive = false
+local interactionEnabled = true
 local claiming = false
 
 -- ================================================
@@ -245,6 +246,78 @@ local function despawnPed()
 end
 
 -- ================================================
+-- INDICATORS (always-on visual cues)
+-- ================================================
+
+local function drawText3D(coords, text, scale, color)
+    SetDrawOrigin(coords.x, coords.y, coords.z, 0)
+    SetTextScale(scale, scale)
+    SetTextFont(4)
+    SetTextProportional(true)
+    SetTextColour(color.r, color.g, color.b, color.a)
+    SetTextOutline()
+    SetTextDropShadow()
+    SetTextCentre(true)
+    BeginTextCommandDisplayText('STRING')
+    AddTextComponentSubstringPlayerName(text)
+    EndTextCommandDisplayText(0.0, 0.0)
+    ClearDrawOrigin()
+end
+
+local function startIndicatorThread()
+    if indicatorThreadActive then return end
+    indicatorThreadActive = true
+
+    CreateThread(function()
+        while indicatorThreadActive do
+            local sleep = 1000
+
+            if interactionEnabled and pedHandle and DoesEntityExist(pedHandle) then
+                local cfg = Config.Indicators or {}
+                local pedCoords = GetEntityCoords(pedHandle)
+                local playerCoords = GetEntityCoords(PlayerPedId())
+                local dist = #(playerCoords - pedCoords)
+
+                local chev = cfg.Chevron
+                if chev and chev.Enabled and dist < (chev.Distance or 30.0) then
+                    sleep = 0
+                    DrawMarker(
+                        chev.Type or 25,
+                        pedCoords.x, pedCoords.y, pedCoords.z + (chev.HeightOffset or 1.2),
+                        0.0, 0.0, 0.0,
+                        0.0, 0.0, 0.0,
+                        chev.Size.x, chev.Size.y, chev.Size.z,
+                        chev.Color.r, chev.Color.g, chev.Color.b, chev.Color.a,
+                        chev.BobUpAndDown or false,
+                        true, 2,
+                        chev.Rotate or false,
+                        nil, nil, false
+                    )
+                end
+
+                local label = cfg.Label
+                if label and label.Enabled and dist < (label.Distance or 12.0) then
+                    sleep = 0
+                    local text = label.Text or Locale('floating_label')
+                    drawText3D(
+                        vector3(pedCoords.x, pedCoords.y, pedCoords.z + (label.HeightOffset or 1.05)),
+                        text,
+                        label.Scale or 0.4,
+                        label.Color or { r = 255, g = 255, b = 255, a = 215 }
+                    )
+                end
+            end
+
+            Wait(sleep)
+        end
+    end)
+end
+
+local function stopIndicatorThread()
+    indicatorThreadActive = false
+end
+
+-- ================================================
 -- INTERACTION SETUP
 -- ================================================
 local function setupInteraction()
@@ -254,12 +327,14 @@ local function setupInteraction()
     else
         startDistanceLoop()
     end
+    startIndicatorThread()
 end
 
 local function teardownInteraction()
     unregisterTarget('ox')
     unregisterTarget('qb')
     stopDistanceLoop()
+    stopIndicatorThread()
 end
 
 -- ================================================

@@ -15,6 +15,9 @@ Locales['en'] = {
     ['invalid_data']         = 'Invalid data provided.',
     ['server_error']         = 'An internal error occurred.',
 
+    -- Indicators
+    ['floating_label']       = 'Welcome - press to interact',
+
     -- Welcome flow
     ['already_received']     = 'You have already received your welcome package.',
     ['welcome_starting']     = 'Welcome to the city! Preparing your starter package...',
@@ -41,6 +44,9 @@ Locales['es'] = {
     ['no_permission']        = 'No tienes permiso.',
     ['invalid_data']         = 'Datos invalidos proporcionados.',
     ['server_error']         = 'Ocurrio un error interno.',
+
+    -- Indicators
+    ['floating_label']       = 'Bienvenido - presiona para interactuar',
 
     -- Welcome flow
     ['already_received']     = 'Ya recibiste tu paquete de bienvenida.',
