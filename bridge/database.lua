@@ -46,3 +46,25 @@ function Bridge.DB.Reset(identifier)
         { identifier }
     ) or 0
 end
+
+-- ================================================
+-- VEHICLE GARAGE COLUMN
+-- nb-garages reads `garage` from owned_vehicles (ESX) /
+-- player_vehicles (QBCore) to decide where a vehicle lives.
+-- After Bridge.GiveVehicle inserts the row, we update the
+-- column to either the configured garage label or 'OUT'.
+-- ================================================
+
+local _vehicleTable = (GetResourceState('qb-core') == 'started') and 'player_vehicles' or 'owned_vehicles'
+
+---@param plate string
+---@param garageLabel string  -- 'OUT' or a nb-garages label
+---@return number affectedRows
+function Bridge.DB.SetVehicleGarage(plate, garageLabel)
+    if not plate or not garageLabel then return 0 end
+    plate = Bridge.NormalizePlate(plate)
+    return MySQL.update.await(
+        ('UPDATE %s SET garage = ? WHERE TRIM(plate) = ?'):format(_vehicleTable),
+        { garageLabel, plate }
+    ) or 0
+end

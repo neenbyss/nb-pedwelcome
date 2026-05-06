@@ -312,11 +312,30 @@ local function findClearSpot(baseCoords)
     return nil, heading
 end
 
+-- Server-side already gives keys for known systems; this is a client-only
+-- safety net for resources that need a local "I just got this car" event
+-- (typically to refresh a local cache or show an icon).
 local function fireKeysEvent(plate, vehicle)
-    local k = (Config.VehicleSpawn or {}).Keys
-    if not k or not k.Event then return end
-    local arg = (k.ArgsType == 'vehicle') and vehicle or plate
-    TriggerEvent(k.Event, arg)
+    local cfg = Config.Keys or {}
+    if cfg.Mode == 'off' then return end
+
+    if cfg.Mode == 'manual' then
+        local m = cfg.Manual or {}
+        if not m.Event or m.Side ~= 'client' then return end
+        local payload = (m.ArgsType == 'vehicle') and vehicle or plate
+        TriggerEvent(m.Event, payload, table.unpack(m.Args or {}))
+        return
+    end
+
+    -- mode == 'auto' (default): refresh client caches for known systems
+    if GetResourceState('qb-vehiclekeys') == 'started' then
+        TriggerEvent('vehiclekeys:client:SetOwner', plate)
+    elseif GetResourceState('mk_vehiclekeys') == 'started' then
+        TriggerEvent('mk_vehiclekeys:client:add', plate)
+    elseif GetResourceState('t1ger_keys') == 'started' then
+        TriggerEvent('t1ger_keys:client:addKey', plate)
+    end
+    -- qs-vehiclekeys, wasabi_carlock, MrNewbVehicleKeys are handled server-side.
 end
 
 ---@param entry table { model, plate, spawn = vector4 }

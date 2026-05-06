@@ -6,38 +6,160 @@
 local RESOURCE_NAME = GetCurrentResourceName()
 
 -- ================================================
--- INTERNAL: build the list of vehicles to spawn on the client
--- after the server has committed them to the player's garage.
--- Returns: { { model, plate, mode, spawn = vector4 }, ... }
+-- INTEGRATIONS: nb-garages + key system detection
+-- ================================================
+local function nbGaragesAvailable()
+    return Config.NbGarages
+        and Config.NbGarages.Enabled
+        and GetResourceState('nb-garages') == 'started'
+end
+
+local function nbGaragesPersistentSpawnAvailable()
+    if not nbGaragesAvailable() then return false end
+    if not Config.NbGarages.UseSpawnExport then return false end
+    -- The export is only registered when nb-garages has Config.PersistentVehicles = true
+    -- so a pcall'd call returning a usable result means it's available.
+    local exp = exports['nb-garages']
+    return exp and exp.SpawnPersistentVehicle ~= nil
+end
+
+---Detect which vehicle-keys resource is running.
+---@return string|nil  one of: 'qs','wasabi','mrnewb','mk','qb','t1ger', or nil
+local function detectKeyResource()
+    if GetResourceState('qs-vehiclekeys')   == 'started' then return 'qs'     end
+    if GetResourceState('wasabi_carlock')   == 'started' then return 'wasabi' end
+    if GetResourceState('MrNewbVehicleKeys') == 'started' then return 'mrnewb' end
+    if GetResourceState('mk_vehiclekeys')   == 'started' then return 'mk'     end
+    if GetResourceState('qb-vehiclekeys')   == 'started' then return 'qb'     end
+    if GetResourceState('t1ger_keys')       == 'started' then return 't1ger'  end
+    return nil
+end
+
+---Give keys for a plate to a player, by either auto-detection or manual config.
+---Safe: any resource missing or export erroring is logged and ignored.
+---@param src number
+---@param plate string
+local function giveVehicleKeys(src, plate)
+    local mode = (Config.Keys and Config.Keys.Mode) or 'auto'
+    if mode == 'off' then return end
+
+    if mode == 'manual' then
+        local m = Config.Keys.Manual or {}
+        if not m.Event then return end
+        -- Manual server side fires here; manual client side is fired from client/main.lua
+        if m.Side == 'server' then
+            TriggerEvent(m.Event, src, plate, table.unpack(m.Args or {}))
+        end
+        return
+    end
+
+    -- mode == 'auto'
+    local resource = detectKeyResource()
+    if not resource then
+        Debugger('Keys', 'No supported key resource detected; skipping')
+        return
+    end
+
+    local ok, err = pcall(function()
+        if resource == 'qs' then
+            -- exports['qs-vehiclekeys']:GiveKeys(plate, source, isPersist)
+            exports['qs-vehiclekeys']:GiveKeys(plate, src, true)
+        elseif resource == 'wasabi' then
+            -- exports.wasabi_carlock:GiveKey(source, plate)
+            exports.wasabi_carlock:GiveKey(src, plate)
+        elseif resource == 'mrnewb' then
+            -- exports['MrNewbVehicleKeys']:GiveKeys(source, plate)
+            exports['MrNewbVehicleKeys']:GiveKeys(src, plate)
+        elseif resource == 'mk' then
+            -- mk_vehiclekeys exposes a client event most commonly
+            TriggerClientEvent('mk_vehiclekeys:client:add', src, plate)
+        elseif resource == 'qb' then
+            -- qb-vehiclekeys: client event sets the local owner
+            TriggerClientEvent('vehiclekeys:client:SetOwner', src, plate)
+        elseif resource == 't1ger' then
+            TriggerClientEvent('t1ger_keys:client:addKey', src, plate)
+        end
+    end)
+    if not ok then
+        Debugger('Keys', 'Failed to give keys via', resource, '->', tostring(err))
+    end
+end
+
+---Spawn a vehicle via nb-garages persistent system. Returns true on success.
+---@param plate string
+---@param spawn vector4
+---@return boolean
+local function nbGaragesSpawn(plate, spawn)
+    local pos = vector4(spawn.x, spawn.y, spawn.z, spawn.w or 0.0)
+    local ok, netIdOrErr = pcall(function()
+        return exports['nb-garages']:SpawnPersistentVehicle(plate, pos)
+    end)
+    if not ok or not netIdOrErr or netIdOrErr == false then
+        Debugger('NbGarages', 'SpawnPersistentVehicle failed for plate', plate, '->', tostring(netIdOrErr))
+        return false
+    end
+    return true
+end
+
+-- ================================================
+-- INTERNAL: build the list of vehicles to spawn on the client.
+-- Returns: { { model, plate, spawn }, ... } only for entries that
+-- still need a client-side spawn (nb-garages spawn export not used).
 -- ================================================
 ---@param src number
 ---@return table
 local function grantVehicles(src)
-    local out = {}
+    local toSpawnClient = {}
     local vehicles = (Config.Rewards and Config.Rewards.Vehicles) or {}
+    local hasNbGarages = nbGaragesAvailable()
+    local canPersistSpawn = nbGaragesPersistentSpawnAvailable()
+    local defaultGarage = (Config.NbGarages and Config.NbGarages.AssignGarage) or 'PillboxGarage'
 
     for _, v in ipairs(vehicles) do
         if v and v.Model then
             local plate = Bridge.NormalizePlate(Bridge.GeneratePlate())
             local props = { plate = plate }
 
-            -- Server-side: persist the vehicle in the player's garage table.
+            -- 1) Persist the vehicle in the framework's vehicle table.
             local ok = pcall(Bridge.GiveVehicle, src, v.Model, props)
             if not ok then
                 Debugger('Rewards', 'Bridge.GiveVehicle failed for', v.Model, 'plate', plate)
             end
 
+            -- 2) Set the garage column (nb-garages compat).
+            if hasNbGarages then
+                local label
+                if v.Mode == 'spawn' then
+                    label = v.Garage or 'OUT'
+                else
+                    label = v.Garage or defaultGarage
+                end
+                Bridge.DB.SetVehicleGarage(plate, label)
+            end
+
+            -- 3) Give keys (most modern key resources cope without this, but
+            --    the explicit handshake helps with key UIs / temp spawn caches).
+            giveVehicleKeys(src, plate)
+
+            -- 4) Physical spawn for Mode = 'spawn'.
             if v.Mode == 'spawn' and v.Spawn then
-                out[#out + 1] = {
-                    model = v.Model,
-                    plate = plate,
-                    spawn = v.Spawn,
-                }
+                local spawnedByGarages = false
+                if canPersistSpawn then
+                    spawnedByGarages = nbGaragesSpawn(plate, v.Spawn)
+                end
+                if not spawnedByGarages then
+                    -- Fall back to client-side spawn.
+                    toSpawnClient[#toSpawnClient + 1] = {
+                        model = v.Model,
+                        plate = plate,
+                        spawn = v.Spawn,
+                    }
+                end
             end
         end
     end
 
-    return out
+    return toSpawnClient
 end
 
 -- ================================================
